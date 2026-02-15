@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebRTC Localhost Test</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: #f0f2f5;
+      }
+      .video-container {
+        display: flex;
+        gap: 20px;
+        margin-top: 20px;
+      }
+      video {
+        width: 320px;
+        height: 240px;
+        background: #000;
+        border-radius: 8px;
+      }
+      #status {
+        margin: 15px;
+        font-weight: bold;
+        color: #007bff;
+      }
+      .controls {
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>WebRTC Localhost 1:1</h2>
+    <div class="controls">
+      <input type="text" id="roomInput" value="test-room" />
+      <button onclick="init()">Join Room</button>
+    </div>
+    <div id="status">Status: Not Connected</div>
+
+    <div class="video-container">
+      <div>
+        <p>Local</p>
+        <video id="localVideo" autoplay playsinline muted></video>
+      </div>
+      <div>
+        <p>Remote</p>
+        <video id="remoteVideo" autoplay playsinline></video>
+      </div>
+    </div>
+
+    <script>
+      const socket = new WebSocket("ws://localhost:8080");
+      let localStream, pc, roomId;
+
+      const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+      async function init() {
+        roomId = document.getElementById("roomInput").value;
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+          document.getElementById("localVideo").srcObject = localStream;
+          socket.send(JSON.stringify({ type: "join", roomId }));
+          document.getElementById("status").innerText =
+            "Status: Joined " + roomId;
+        } catch (e) {
+          alert("Camera access denied. Ensure no other app is using it.");
+        }
+      }
+
+      function createPeerConnection() {
+        pc = new RTCPeerConnection(config);
+        localStream
+          .getTracks()
+          .forEach((track) => pc.addTrack(track, localStream));
+
+        pc.ontrack = (event) => {
+          document.getElementById("remoteVideo").srcObject = event.streams[0];
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.send(
+              JSON.stringify({
+                type: "signal",
+                roomId,
+                candidate: event.candidate,
+              }),
+            );
+          }
+        };
+        return pc;
+      }
+
+      socket.onmessage = async (msg) => {
+        const data = JSON.parse(msg.data);
+
+        if (data.type === "ready") {
+          document.getElementById("status").innerText = "Status: Connecting...";
+          pc = createPeerConnection();
+          if (data.isCaller) {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.send(JSON.stringify({ type: "signal", roomId, sdp: offer }));
+          }
+        }
+
+        if (data.type === "signal") {
+          if (!pc) pc = createPeerConnection();
+          if (data.sdp) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+            if (data.sdp.type === "offer") {
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              socket.send(
+                JSON.stringify({ type: "signal", roomId, sdp: answer }),
+              );
+            }
+          } else if (data.candidate) {
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+          }
+        }
+      };
+    </script>
+  </body>
+</html>
