@@ -17,4 +17,3 @@ node server.js
 
 3- Open
 index.html on your browser
-zaa
